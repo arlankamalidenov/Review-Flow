@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Font Test</title>
+    <style>
+        @font-face {
+            font-family: 'Eurostile';
+            src: url('/fonts/fonnts.com-Eurostile_Medium_Italic.otf') format('opentype');
+            font-weight: 500;
+            font-style: italic;
+            font-display: swap;
+        }
+
+        body {
+            background: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+            padding: 40px;
+        }
+
+        .test-eurostile {
+            font-family: 'Eurostile', sans-serif;
+            font-size: 60px;
+            color: #DFFF00;
+            font-style: italic;
+            margin: 20px 0;
+        }
+
+        .test-montserrat {
+            font-family: 'Montserrat', sans-serif;
+            font-size: 60px;
+            color: #FFFFFF;
+            font-weight: 800;
+            text-transform: uppercase;
+            margin: 20px 0;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <h1>Font Loading Test</h1>
+
+    <h2>Eurostile Medium Italic:</h2>
+    <div class="test-eurostile">эту проблему</div>
+
+    <h2>Montserrat Extra Bold:</h2>
+    <div class="test-montserrat">показываю как решить</div>
+
+    <script>
+        // Check if fonts are loaded
+        document.fonts.ready.then(() => {
+            console.log('✅ All fonts loaded');
+
+            document.fonts.forEach((font) => {
+                console.log('Font:', font.family, font.style, font.weight);
+            });
+
+            // Check Eurostile specifically
+            const eurostileLoaded = document.fonts.check('60px Eurostile');
+            console.log('Eurostile loaded:', eurostileLoaded);
+
+            if (!eurostileLoaded) {
+                console.error('❌ Eurostile NOT loaded!');
+                alert('Eurostile font failed to load. Check console for details.');
+            } else {
+                console.log('✅ Eurostile loaded successfully!');
+            }
+        });
+    </script>
+</body>
+
+</html>
