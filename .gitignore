@@ -30,3 +30,4 @@ dist-ssr
 *.sw?
 
 google-credentials.json
+src/backend-proxy/uploads/
