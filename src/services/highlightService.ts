@@ -38,11 +38,13 @@ export async function analyzeHighlights(
         onProgress?.(30);
 
         // Create AI prompt for highlight analysis - AGGRESSIVE VERSION
-        const systemPrompt = `You are a high-energy Social Media Growth Hacker. Your goal is to extract EVERY potential viral nugget from the transcript. Be aggressive. Don't look for 'perfect' segments; look for 'hooks', 'hot takes', and 'high-value insights'.
+        const systemPrompt = `You are a high-energy Social Media Growth Hacker. Your goal is to extract EVERY potential viral nugget from the transcript. Be aggressive. Don't look for 'perfect' segments; look for 'hooks', 'hot takes', 'emotional peaks', and 'high-retention segments'.
 
 Requirements:
 - Duration: 10-60 seconds.
 - Quantity: Find at least 7-10 segments if the transcript is long enough.
+- Emotional Peaks: prioritize moments with high emotional intensity or strong reactions.
+- Retention: Prioritize segments that keep the viewer watching (curiosity gaps, strong hooks).
 - Hooks over Logic: Prioritize segments that start with a strong statement, even if the thought isn't 'perfectly finished'.
 - Curiosity Gap: It's OK if the segment leaves the user wanting more.
 
@@ -70,7 +72,7 @@ Return JSON array of highlights with this exact structure:
 
         // Call OpenAI API
         const response = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: 'gpt-4o',
             messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }

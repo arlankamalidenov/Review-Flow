@@ -1,6 +1,7 @@
 export interface VideoFile {
     file: File;
     url: string;
+    filePath?: string; // Path on backend server (if uploaded)
     duration: number;
     width: number;
     height: number;

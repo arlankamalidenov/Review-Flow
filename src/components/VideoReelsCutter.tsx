@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Upload, Download, Sparkles, Settings2, Film, Play, Pause } from 'lucide-react';
+import { Upload, Download, Sparkles, Settings2, Film, Link, Loader2 } from 'lucide-react';
 import { ProcessingProgress } from './video/ProcessingProgress';
-import { getVideoMetadata, processCompleteReel, initFFmpeg, createProxyVideo } from '../utils/ffmpeg';
+import { getVideoMetadata, processCompleteReel, uploadVideo } from '../utils/ffmpeg';
 import { transcribeVideo, optimizeSubtitleSegments, adjustSubtitleTiming } from '../services/whisperService';
 import { analyzeHighlights } from '../services/highlightService';
 import { VideoFile, VideoProcessingState, ReelConfig, DEFAULT_REEL_CONFIG, SubtitleSegment } from '../types/video';
@@ -11,7 +11,7 @@ import { RemotionPreview } from '../video-reels';
 import { PlayerRef } from '@remotion/player';
 import { HighlightsSidebar } from './HighlightsSidebar';
 import { useVideoSync } from '../hooks/useVideoSync';
-import { PlayerControls } from './PlayerControls';
+// PlayerControls removed - AI suggestions now control segment selection
 
 const PREVIEW_STYLE = {
     fontFamily: 'Eurostile',
@@ -34,6 +34,10 @@ export const VideoReelsCutter: React.FC = () => {
     const [showSettings, setShowSettings] = useState(false);
     const [highlights, setHighlights] = useState<HighlightSegment[]>([]);
     const [isAnalyzingHighlights, setIsAnalyzingHighlights] = useState(false);
+
+    // YouTube URL state
+    const [youtubeUrl, setYoutubeUrl] = useState('');
+    const [isFetchingYT, setIsFetchingYT] = useState(false);
 
     // ✅ Custom Hook for Video Synchronization - Passive Mode
     const sync = useVideoSync();
@@ -68,30 +72,16 @@ export const VideoReelsCutter: React.FC = () => {
                 setOutputVideoUrl(null);
             }
 
-            // 🔄 GENERATE PROXY (Immediate Background Process)
-            // This runs after state update so UI shows original first, then switches to proxy
-            console.log('🔄 [Proxy] Starting generation...');
-            // Need to use a separate async function to not block
-            (async () => {
-                try {
-                    // Temporarily show loading status for proxy? 
-                    // Or just let it happen in background. User said "high-speed".
-                    // Let's create a non-blocking toast or small indicator if possible, 
-                    // but for now we'll just log it and update when ready.
-
-                    const ffmpeg = await initFFmpeg();
-                    const proxyBlob = await createProxyVideo(ffmpeg, file, (p) => {
-                        console.log(`[Proxy Progress] ${p}%`);
-                    });
-
-                    const proxyUrl = URL.createObjectURL(proxyBlob);
-                    setProxyVideoUrl(proxyUrl);
-                    console.log('✅ [Proxy] Ready and set!');
-                } catch (err) {
-                    console.error('❌ [Proxy] Generation failed:', err);
-                    // Fallback to original is automatic since proxyVideoUrl stays null
-                }
-            })();
+            // Upload to backend immediately to get filePath
+            // We don't need proxy generation on frontend anymore (backend handles it or we use original URL)
+            console.log('📤 [Upload] Sending to backend...');
+            uploadVideo(file).then(({ filePath }) => {
+                console.log('✅ [Upload] Server path:', filePath);
+                setVideoFile(prev => prev ? { ...prev, filePath } : null);
+            }).catch(err => {
+                console.error('❌ [Upload] Failed:', err);
+                // Non-fatal, we can still use local URL for preview
+            });
 
         } catch (error) {
             setProcessingState({
@@ -117,17 +107,11 @@ export const VideoReelsCutter: React.FC = () => {
                 message: 'Extracting audio from video...'
             });
 
-            const ffmpeg = await getVideoMetadata(videoFile.file).then(() => {
-                // Import initFFmpeg
-                return import('../utils/ffmpeg').then(m => m.initFFmpeg((p) => {
-                    // p приходит в процентах (0-100), нормализуем и масштабируем в 0-20%
-                    const normalizedProgress = Math.min(100, Math.max(0, p));
-                    const finalProgress = Math.min(20, Math.round(normalizedProgress * 0.2));
-                    setProcessingState(prev => ({
-                        ...prev,
-                        progress: finalProgress // 0-20%
-                    }));
-                }));
+            // Step 1: Initialize (Fast)
+            setProcessingState({
+                status: 'loading',
+                progress: 10,
+                message: 'Initializing analysis...'
             });
 
             setProcessingState({
@@ -136,14 +120,19 @@ export const VideoReelsCutter: React.FC = () => {
                 message: 'Extracting audio...'
             });
 
-            const { extractAudio } = await import('../utils/ffmpeg');
-            const audioBlob = await extractAudio(ffmpeg, videoFile.file, (p) => {
-                // p приходит в процентах (0-100), нормализуем и масштабируем в 20-40%
-                const normalizedProgress = Math.min(100, Math.max(0, p));
-                const finalProgress = Math.min(40, 20 + Math.round(normalizedProgress * 0.2));
+            // Step 2: Extract audio via Backend
+            setProcessingState({
+                status: 'loading',
+                progress: 20,
+                message: 'Extracting audio (Backend)...'
+            });
+
+            const { extractCompressedAudio } = await import('../utils/ffmpeg');
+            // Pass the entire videoFile object which has filePath if uploaded
+            const audioBlob = await extractCompressedAudio(null, videoFile, (p) => {
                 setProcessingState(prev => ({
                     ...prev,
-                    progress: finalProgress // 20-40%
+                    progress: 20 + Math.round(p * 0.2) // 20-40%
                 }));
             });
 
@@ -256,35 +245,7 @@ export const VideoReelsCutter: React.FC = () => {
         }
     }, [videoFile, reelConfig, subtitles, outputVideoUrl]);
 
-    // ✅ Prepare Preview - Subtitles should already exist from Global Analysis
-    const handleCreateReel = useCallback(async () => {
-        if (!videoFile) {
-            alert('Please upload a video');
-            return;
-        }
-
-        if (subtitles.length === 0) {
-            alert('Please run "Analyze Full Video" first to generate subtitles and highlights');
-            return;
-        }
-
-        // Just show a success message - subtitles are already loaded
-        setProcessingState({
-            status: 'complete',
-            progress: 100,
-            message: '✅ Preview ready! Adjust timeline and click "Download MP4" to export.'
-        });
-
-        // Reset processing state after 2 seconds
-        setTimeout(() => {
-            setProcessingState({
-                status: 'idle',
-                progress: 0,
-            });
-        }, 2000);
-
-        console.log('✅ [Preview] Ready with', subtitles.length, 'subtitles');
-    }, [videoFile, subtitles]);
+    // handleCreateReel removed - AI suggestions now control segment selection directly
 
     // ✅ WYSIWYG Download - Full Player Capture (Video + Subtitles → MP4)
     // ✅ Export Logic - Use Original File with FFmpeg
@@ -372,15 +333,11 @@ export const VideoReelsCutter: React.FC = () => {
                 message: '🎬 Initializing...'
             });
 
-            const ffmpeg = await getVideoMetadata(videoFile.file).then(() => {
-                return import('../utils/ffmpeg').then(m => m.initFFmpeg((p) => {
-                    const normalizedProgress = Math.min(100, Math.max(0, p));
-                    const finalProgress = Math.min(10, Math.round(normalizedProgress * 0.1));
-                    setProcessingState(prev => ({
-                        ...prev,
-                        progress: finalProgress
-                    }));
-                }));
+            // Step 1: Initialize (Fast)
+            setProcessingState({
+                status: 'loading',
+                progress: 5,
+                message: '🎬 Initializing...'
             });
 
             // Step 2: Extract compressed audio (10-30%)
@@ -390,13 +347,18 @@ export const VideoReelsCutter: React.FC = () => {
                 message: '🎤 Extracting audio (compressed for API)...'
             });
 
+            // Step 2: Extract compressed audio (Backend)
+            setProcessingState({
+                status: 'loading',
+                progress: 10,
+                message: '🎤 Extracting audio (Backend)...'
+            });
+
             const { extractCompressedAudio } = await import('../utils/ffmpeg');
-            const audioBlob = await extractCompressedAudio(ffmpeg, videoFile.file, (p) => {
-                const normalizedProgress = Math.min(100, Math.max(0, p));
-                const finalProgress = Math.min(30, 10 + Math.round(normalizedProgress * 0.2));
+            const audioBlob = await extractCompressedAudio(null, videoFile, (p) => {
                 setProcessingState(prev => ({
                     ...prev,
-                    progress: finalProgress
+                    progress: 10 + Math.round(p * 0.2) // 10-30%
                 }));
             });
 
@@ -478,6 +440,85 @@ export const VideoReelsCutter: React.FC = () => {
             });
         }
     }, [videoFile, openAIKey]);
+
+    // Handle YouTube video fetch
+    const handleFetchYouTube = useCallback(async () => {
+        if (!youtubeUrl.trim()) {
+            alert('Please enter a YouTube URL');
+            return;
+        }
+
+        try {
+            setIsFetchingYT(true);
+            setProcessingState({
+                status: 'loading',
+                progress: 0,
+                message: '📥 Downloading video from YouTube...'
+            });
+
+            const response = await fetch('http://localhost:3001/api/download-yt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: youtubeUrl.trim() })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to download video');
+            }
+
+            const data = await response.json();
+            console.log('✅ [YouTube] Download complete:', data);
+
+            setProcessingState({
+                status: 'loading',
+                progress: 50,
+                message: '🎬 Loading video...'
+            });
+
+            // Fetch the downloaded video file
+            const videoResponse = await fetch(data.url);
+            const videoBlob = await videoResponse.blob();
+            const videoFile = new File([videoBlob], data.fileName, { type: 'video/mp4' });
+
+            // Get video metadata
+            const metadata = await getVideoMetadata(videoFile);
+            const url = URL.createObjectURL(videoBlob);
+
+            setVideoFile({
+                file: videoFile,
+                url,
+                duration: metadata.duration,
+                width: metadata.width,
+                height: metadata.height,
+            });
+
+            setYoutubeUrl('');
+            setProcessingState({ status: 'idle', progress: 0 });
+            sync.syncToSegment(0);
+            setSubtitles([]);
+            setHighlights([]);
+            setOutputVideo(null);
+            setProxyVideoUrl(null);
+            if (outputVideoUrl) {
+                URL.revokeObjectURL(outputVideoUrl);
+                setOutputVideoUrl(null);
+            }
+
+            // No proxy generation needed client-side
+            console.log('✅ [YouTube] Video loaded');
+
+        } catch (error) {
+            console.error('❌ [YouTube] Error:', error);
+            setProcessingState({
+                status: 'error',
+                progress: 0,
+                error: error instanceof Error ? error.message : 'Failed to download video',
+            });
+        } finally {
+            setIsFetchingYT(false);
+        }
+    }, [youtubeUrl, sync, outputVideoUrl]);
 
     // Handle highlight selection - update timeline
     const handleSelectHighlight = useCallback((start: number, end: number) => {
@@ -595,6 +636,60 @@ export const VideoReelsCutter: React.FC = () => {
                             </div>
                             <p className="text-slate-400 text-sm mt-6">Supported formats: MP4, MOV, AVI, WebM • Max size: 500MB</p>
                         </label>
+
+                        {/* Divider */}
+                        <div className="flex items-center gap-4 my-8 max-w-md mx-auto">
+                            <div className="flex-1 h-px bg-slate-300"></div>
+                            <span className="text-slate-400 font-medium">OR</span>
+                            <div className="flex-1 h-px bg-slate-300"></div>
+                        </div>
+
+                        {/* YouTube URL Input */}
+                        <div className="max-w-lg mx-auto">
+                            <p className="text-slate-600 mb-4 text-lg font-medium">Fetch from YouTube</p>
+                            <div className="flex items-center gap-3">
+                                <div className="relative flex-1">
+                                    <Link className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                                    <input
+                                        type="text"
+                                        value={youtubeUrl}
+                                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                                        placeholder="Paste YouTube URL..."
+                                        className="w-full pl-12 pr-4 py-4 border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent text-base"
+                                        disabled={isFetchingYT}
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleFetchYouTube}
+                                    disabled={!youtubeUrl.trim() || isFetchingYT}
+                                    className="px-8 py-4 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-lg"
+                                >
+                                    {isFetchingYT ? (
+                                        <>
+                                            <Loader2 className="w-5 h-5 animate-spin" />
+                                            <span>Fetching...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Download className="w-5 h-5" />
+                                            <span>Fetch Video</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Processing Progress for YouTube fetch */}
+                        {processingState.status !== 'idle' && (
+                            <div className="mt-8 max-w-lg mx-auto">
+                                <ProcessingProgress
+                                    status={processingState.status}
+                                    progress={processingState.progress}
+                                    message={processingState.message}
+                                    error={processingState.error}
+                                />
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="space-y-6">
@@ -682,19 +777,53 @@ export const VideoReelsCutter: React.FC = () => {
                                     highlights={highlights}
                                     onSelectHighlight={handleSelectHighlight}
                                     isLoading={isAnalyzingHighlights}
+                                    onExportToDrive={async (highlight) => {
+                                        if (!videoFile) return;
+
+                                        // Adjust subtitles for this specific highlight
+                                        const highlightDuration = highlight.end - highlight.start;
+                                        // Type assertion to ensure subtitles is SubtitleSegment[]
+                                        const currentSubtitles: SubtitleSegment[] = subtitles;
+                                        const adjustedSubtitles = adjustSubtitleTiming(currentSubtitles, highlight.start, highlightDuration);
+
+                                        // Prepare form data for upload
+                                        const formData = new FormData();
+                                        formData.append('video', videoFile.file);
+                                        formData.append('startTime', highlight.start.toString());
+                                        formData.append('duration', highlightDuration.toString());
+                                        formData.append('subtitles', JSON.stringify(adjustedSubtitles));
+                                        formData.append('title', highlight.title);
+
+                                        // Call backend
+                                        const response = await fetch('http://localhost:3001/api/export-to-drive', {
+                                            method: 'POST',
+                                            body: formData,
+                                        });
+
+                                        if (!response.ok) {
+                                            const error = await response.json();
+                                            throw new Error(error.error || 'Upload failed');
+                                        }
+
+                                        // Show success toast
+                                        const toast = document.createElement('div');
+                                        toast.className = 'fixed bottom-8 right-8 bg-green-600 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 z-50 animate-bounce-in';
+                                        toast.innerHTML = `
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                            <div>
+                                                <h4 class="font-bold">Success!</h4>
+                                                <p class="text-sm opacity-90">Video sent to Drive! Make.com will take it from here.</p>
+                                            </div>
+                                        `;
+                                        document.body.appendChild(toast);
+                                        setTimeout(() => {
+                                            toast.style.opacity = '0';
+                                            setTimeout(() => toast.remove(), 500);
+                                        }, 4000);
+                                    }}
                                 />
                             </div>
                         </div>
-
-                        {/* Interactive Timeline - Replaced with PlayerControls */}
-                        {videoFile && (
-                            <PlayerControls
-                                videoDuration={videoFile.duration}
-                                reelConfig={reelConfig}
-                                onReelConfigChange={setReelConfig}
-                                sync={sync}
-                            />
-                        )}
 
                         {/* Processing Progress */}
                         {processingState.status !== 'idle' && (
@@ -708,25 +837,6 @@ export const VideoReelsCutter: React.FC = () => {
 
                         {/* Action Buttons */}
                         <div className="flex flex-wrap gap-4 justify-center">
-                            {/* ✅ Preview Selection Button */}
-                            <button
-                                onClick={handleCreateReel}
-                                disabled={!videoFile || processingState.status === 'loading'}
-                                className="px-8 py-4 bg-gradient-to-r from-[#BA0C2F] to-[#9A0A26] text-white font-bold rounded-xl hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3"
-                            >
-                                {processingState.status === 'loading' ? (
-                                    <>
-                                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                        <span>{processingState.message || 'Processing...'}</span>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Film className="w-5 h-5" />
-                                        <span>Preview Selection</span>
-                                    </>
-                                )}
-                            </button>
-
                             {/* Analyze Full Video Button */}
                             <button
                                 onClick={handleGlobalAnalysis}
@@ -762,6 +872,38 @@ export const VideoReelsCutter: React.FC = () => {
                             >
                                 Upload New Video
                             </button>
+
+                            {/* YouTube URL Input */}
+                            <div className="flex items-center gap-2">
+                                <div className="relative">
+                                    <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                                    <input
+                                        type="text"
+                                        value={youtubeUrl}
+                                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                                        placeholder="Paste YouTube URL..."
+                                        className="pl-10 pr-4 py-4 border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent w-64 text-sm"
+                                        disabled={isFetchingYT}
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleFetchYouTube}
+                                    disabled={!youtubeUrl.trim() || isFetchingYT}
+                                    className="px-6 py-4 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                    {isFetchingYT ? (
+                                        <>
+                                            <Loader2 className="w-5 h-5 animate-spin" />
+                                            <span>Fetching...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Download className="w-5 h-5" />
+                                            <span>Fetch Video</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
                         </div>
 
                         {/* Subtitles Preview */}

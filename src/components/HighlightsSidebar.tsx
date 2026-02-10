@@ -1,19 +1,22 @@
 import React, { useState } from 'react';
-import { Sparkles, Copy, Check, TrendingUp, Clock } from 'lucide-react';
+import { Sparkles, Copy, Check, TrendingUp, Clock, UploadCloud, Loader2 } from 'lucide-react';
 import { HighlightSegment } from '../types/highlight';
 
 interface HighlightsSidebarProps {
     highlights: HighlightSegment[];
     onSelectHighlight: (start: number, end: number) => void;
+    onExportToDrive?: (highlight: HighlightSegment) => Promise<void>;
     isLoading?: boolean;
 }
 
 export const HighlightsSidebar: React.FC<HighlightsSidebarProps> = ({
     highlights,
     onSelectHighlight,
+    onExportToDrive,
     isLoading = false,
 }) => {
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+    const [uploadingIndex, setUploadingIndex] = useState<number | null>(null);
 
     const handleCopyCaption = async (caption: string, index: number) => {
         try {
@@ -22,6 +25,19 @@ export const HighlightsSidebar: React.FC<HighlightsSidebarProps> = ({
             setTimeout(() => setCopiedIndex(null), 2000);
         } catch (error) {
             console.error('Failed to copy caption:', error);
+        }
+    };
+
+    const handleExport = async (highlight: HighlightSegment, index: number) => {
+        if (!onExportToDrive) return;
+
+        try {
+            setUploadingIndex(index);
+            await onExportToDrive(highlight);
+        } catch (error) {
+            console.error('Export failed:', error);
+        } finally {
+            setUploadingIndex(null);
         }
     };
 
@@ -39,12 +55,6 @@ export const HighlightsSidebar: React.FC<HighlightsSidebarProps> = ({
         if (score >= 80) return 'text-green-600 bg-green-50';
         if (score >= 60) return 'text-yellow-600 bg-yellow-50';
         return 'text-orange-600 bg-orange-50';
-    };
-
-    const getScoreBadgeColor = (score: number): string => {
-        if (score >= 80) return 'bg-green-500';
-        if (score >= 60) return 'bg-yellow-500';
-        return 'bg-orange-500';
     };
 
     if (isLoading) {
@@ -149,29 +159,59 @@ export const HighlightsSidebar: React.FC<HighlightsSidebarProps> = ({
                             </p>
                         </div>
 
-                        {/* Copy Caption Button */}
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                handleCopyCaption(highlight.social_caption, index);
-                            }}
-                            className={`w-full px-3 py-2 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 ${copiedIndex === index
-                                ? 'bg-green-500 text-white'
-                                : 'bg-slate-100 text-slate-700 hover:bg-purple-100 hover:text-purple-700'
-                                }`}
-                        >
-                            {copiedIndex === index ? (
-                                <>
-                                    <Check className="w-4 h-4" />
-                                    <span>Copied!</span>
-                                </>
-                            ) : (
-                                <>
-                                    <Copy className="w-4 h-4" />
-                                    <span>Copy Caption</span>
-                                </>
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-2">
+                            {/* Copy Caption Button */}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyCaption(highlight.social_caption, index);
+                                }}
+                                className={`flex-1 px-3 py-2 rounded-lg font-medium text-xs transition-all flex items-center justify-center gap-2 ${copiedIndex === index
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-purple-100 hover:text-purple-700'
+                                    }`}
+                            >
+                                {copiedIndex === index ? (
+                                    <>
+                                        <Check className="w-3.5 h-3.5" />
+                                        <span>Copied!</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Copy className="w-3.5 h-3.5" />
+                                        <span>Copy Caption</span>
+                                    </>
+                                )}
+                            </button>
+
+                            {/* Export to Drive Button */}
+                            {onExportToDrive && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleExport(highlight, index);
+                                    }}
+                                    disabled={uploadingIndex === index}
+                                    className={`flex-1 px-3 py-2 rounded-lg font-medium text-xs transition-all flex items-center justify-center gap-2 text-white shadow-md hover:shadow-lg ${uploadingIndex === index
+                                            ? 'bg-blue-400 cursor-wait'
+                                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
+                                        }`}
+                                >
+                                    {uploadingIndex === index ? (
+                                        <>
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            <span>Running...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <UploadCloud className="w-3.5 h-3.5" />
+                                            <span>Send to Queue</span>
+                                        </>
+                                    )}
+                                </button>
                             )}
-                        </button>
+                        </div>
 
                         {/* Hover Indicator */}
                         <div className="absolute inset-0 rounded-xl border-2 border-purple-500 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
